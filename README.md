@@ -7,10 +7,12 @@ Kokoro TTS Demo is a mobile application that demonstrates high-quality text-to-s
 ### Demo Video
 
 <p align="center">
-  <video src="/assets/kokoro-demo.mov" controls width="320"></video>
+  <a href="https://youtube.com/shorts/IvZ5ahpOsZE" target="_blank">
+    <img src="https://img.youtube.com/vi/IvZ5ahpOsZE/0.jpg" alt="Kokoro TTS Demo Video" width="320">
+  </a>
 </p>
 
-*Note: If the video doesn't play above, you can find it in the project root as `/assets/kokoro-demo.mov`*
+*Click the image above to watch the demo video on YouTube*
 
 ## Features
 
