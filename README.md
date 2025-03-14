@@ -1,28 +1,61 @@
-# MLX TTS Demo for Expo
+# Kokoro TTS Expo App
 
-This project demonstrates how to use the MLX Swift library to run text-to-speech models directly on iOS devices using Expo. It includes a custom Expo module (`expo-mlx-tts`) that interfaces with MLX Swift and a sample application that showcases its usage.
+## On-Device Text-to-Speech with ONNX Runtime
+
+Kokoro TTS Demo is a mobile application that demonstrates high-quality text-to-speech capabilities running entirely on-device using ONNX Runtime. This app showcases how modern neural TTS models can be deployed on mobile devices without requiring cloud connectivity.
+
+### Demo Video
+
+<p align="center">
+  <video src="kokoro-demo.mp4" controls width="320"></video>
+</p>
+
+*Note: If the video doesn't play above, you can find it in the project root as `kokoro-demo.mp4`*
 
 ## Features
 
-- Run the Kokoro-82M-4bit text-to-speech model on iOS devices
-- Download models from Hugging Face
-- Generate speech from text
-- Real-time progress updates
-- Simple UI for testing
+- 🔊 High-quality neural text-to-speech
+- 📱 Runs 100% on-device (no internet required after initial download)
+- 🎭 Multiple voices with different accents and styles
+- 🔄 Adjustable speech speed
+- 📊 Performance metrics for speech generation
+- 📦 Multiple model options with different size/quality tradeoffs
 
-## Requirements
+## How It Works
 
-- iOS 14.0 or later
-- macOS with Xcode 14.0 or later
-- Node.js 16 or later
-- Expo CLI
+Kokoro TTS uses a neural text-to-speech model converted to ONNX format, which allows it to run efficiently on mobile devices using ONNX Runtime. The app follows these steps to generate speech:
+
+1. **Text Normalization**: Prepares the input text for processing
+2. **Phonemization**: Converts text to phonetic representation
+3. **Tokenization**: Converts phonemes to token IDs
+4. **Neural Inference**: Processes tokens through the ONNX model
+5. **Audio Generation**: Converts model output to audio waveforms
+6. **Playback**: Plays the generated audio through device speakers
+
+## Technology Stack
+
+- **React Native**: Core framework for cross-platform mobile development
+- **Expo**: Development platform for React Native
+- **ONNX Runtime**: High-performance inference engine for ONNX models
+- **Expo AV**: Audio playback capabilities
+- **Expo FileSystem**: File management for model and voice data
 
 ## Getting Started
 
-1. Clone this repository:
+### Prerequisites
+
+- Node.js (v14 or later)
+- Expo CLI
+- iOS device with iOS 13+ (for development)
+- Xcode (for iOS builds)
+- Android Studio (for Android builds)
+
+### Installation
+
+1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/expo-mlx-tts-demo.git
-   cd expo-mlx-tts-demo
+   git clone https://github.com/yourusername/expo-kokoro-onnx.git
+   cd expo-kokoro-onnx
    ```
 
 2. Install dependencies:
@@ -32,60 +65,75 @@ This project demonstrates how to use the MLX Swift library to run text-to-speech
 
 3. Start the Expo development server:
    ```bash
-   npm start
+   npx expo start
    ```
 
-4. Run on iOS:
-   ```bash
-   npm run ios
-   ```
+### Building a Development Client
 
-## How It Works
+To run the app on a physical device with full ONNX Runtime support:
 
-The project consists of two main parts:
-
-1. **expo-mlx-tts Module**: A custom Expo module that interfaces with MLX Swift to run text-to-speech models.
-2. **Demo Application**: A React Native application that demonstrates how to use the module.
-
-### Module Structure
-
-- `modules/expo-mlx-tts/src`: TypeScript definitions and JavaScript interface
-- `modules/expo-mlx-tts/ios`: Swift implementation of the module
-- `modules/expo-mlx-tts/ios/KokoroTTSModel.swift`: Implementation of the Kokoro TTS model
-
-### Using the Module
-
-```javascript
-import * as ExpoMlxTts from 'expo-mlx-tts';
-
-// Generate speech
-const result = await ExpoMlxTts.generateSpeech({
-  text: "Hello, world!",
-  modelPath: "/path/to/model", // Optional
-  voicePreset: "default", // Optional
-  speed: 1.0, // Optional
-});
-
-// Play speech
-await ExpoMlxTts.speak({
-  text: "Hello, world!",
-});
-
-// Download a model
-const modelPath = await ExpoMlxTts.downloadModel(
-  "https://huggingface.co/mlx-community/Kokoro-82M-4bit/resolve/main/model.safetensors",
-  "Kokoro-82M-4bit"
-);
+```bash
+npx expo run:ios
 ```
 
-## Model Information
+or
 
-This demo uses the [Kokoro-82M-4bit](https://huggingface.co/mlx-community/Kokoro-82M-4bit) model from Hugging Face, which is a 4-bit quantized version of the Kokoro TTS model optimized for MLX.
+```bash
+npx expo run:android
+```
 
-## Customization
+## Usage
 
-You can customize the module to use different TTS models by modifying the `KokoroTTSModel.swift` file. The current implementation includes placeholders that you can replace with actual MLX model code.
+1. **Select a Model**: Choose from different model sizes based on your device capabilities
+2. **Download a Voice**: Select and download one of the available voices
+3. **Adjust Speed**: Set the speech rate using the speed controls
+4. **Enter Text**: Type or paste the text you want to convert to speech
+5. **Generate Speech**: Press the "Generate Speech" button to create and play the audio
+
+## Models
+
+The app supports multiple model variants with different size and quality tradeoffs:
+
+| Model | Size | Quality | Description |
+|-------|------|---------|-------------|
+| Full Precision | 326 MB | Highest | Best quality, largest size |
+| FP16 | 163 MB | High | High quality, reduced size |
+| Q8F16 | 86 MB | Good | Balanced quality and size |
+| Quantized | 92.4 MB | Medium | Reduced quality, smaller size |
+
+## Voices
+
+The app includes multiple voices with different characteristics:
+
+- American English (Male/Female)
+- British English (Male/Female)
+- Various voice styles and characteristics
+
+## Development
+
+### Project Structure
+
+- `/kokoro`: Core TTS implementation
+  - `kokoroOnnx.ts`: Main TTS engine implementation
+  - `models.ts`: Model management and downloading
+  - `voices.ts`: Voice definitions and management
+- `App.tsx`: Main application UI
+- `app.json`: Expo configuration
+- `metro.config.js`: Metro bundler configuration
+
+### Key Components
+
+- **KokoroOnnx**: Main class that handles TTS functionality
+- **Model Management**: Functions for downloading and managing models
+- **Voice Management**: Functions for downloading and using voice data
+- **UI Components**: React Native components for the user interface
 
 ## License
 
-MIT 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- ONNX Runtime team for the mobile inference engine
+- Expo team for the development platform
+- Contributors to the open-source TTS models

@@ -1,15 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TextInput, Button, ScrollView, ActivityIndicator, Platform, SafeAreaView, KeyboardAvoidingView, Alert, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, ScrollView, ActivityIndicator, Platform, SafeAreaView, KeyboardAvoidingView, Alert, TouchableOpacity, Modal, FlatList, Slider } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as FileSystem from 'expo-file-system';
 import { Audio } from 'expo-av';
 import { VOICES } from './kokoro/voices';
 import KokoroOnnx from './kokoro/kokoroOnnx';
+import { MODELS, downloadModel, isModelDownloaded, getDownloadedModels, deleteModel } from './kokoro/models';
 
-// Model URL from Hugging Face
-const MODEL_URL = 'https://huggingface.co/onnx-community/Kokoro-82M-ONNX/resolve/main/onnx/model_q8f16.onnx';
-const MODEL_FILENAME = 'model_q8f16.onnx';
-const MODEL_LOCAL_PATH = FileSystem.cacheDirectory + MODEL_FILENAME;
+// Default model
+const DEFAULT_MODEL_ID = 'model_q8f16.onnx';
 
 export default function App() {
   const [text, setText] = useState("Hello, this is a test of the Kokoro text to speech system running on Expo with ONNX Runtime.");
@@ -29,10 +28,21 @@ export default function App() {
   const [isModelInitialized, setIsModelInitialized] = useState(false);
   const [isVoiceDownloading, setIsVoiceDownloading] = useState(false);
   const [downloadedVoices, setDownloadedVoices] = useState<Set<string>>(new Set());
+  const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string>(DEFAULT_MODEL_ID);
+  const [showModelSelector, setShowModelSelector] = useState(false);
+  const [currentModelId, setCurrentModelId] = useState<string | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [tokensPerSecond, setTokensPerSecond] = useState(0);
+  const [streamProgress, setStreamProgress] = useState(0);
+  const [streamDuration, setStreamDuration] = useState(0);
+  const [streamPosition, setStreamPosition] = useState(0);
+  const [timeToFirstToken, setTimeToFirstToken] = useState(0);
+  const [streamingPhonemes, setStreamingPhonemes] = useState("");
 
   // Check if model is already downloaded
   useEffect(() => {
-    checkIfModelExists();
+    checkDownloadedModels();
     checkDownloadedVoices();
   }, []);
 
@@ -59,23 +69,31 @@ export default function App() {
 
   // Initialize model when downloaded
   useEffect(() => {
-    if (isModelDownloaded && !isModelInitialized) {
-      initializeModel();
+    if (downloadedModels.length > 0 && !isModelInitialized) {
+      initializeModel(selectedModelId);
     }
-  }, [isModelDownloaded]);
+  }, [downloadedModels]);
 
-  const checkIfModelExists = async () => {
+  const checkDownloadedModels = async () => {
     try {
-      const fileInfo = await FileSystem.getInfoAsync(MODEL_LOCAL_PATH);
-      setIsModelDownloaded(fileInfo.exists);
-      if (fileInfo.exists) {
-        console.log('Model already downloaded at:', MODEL_LOCAL_PATH);
+      const models = await getDownloadedModels();
+      setDownloadedModels(models);
+      
+      if (models.length > 0) {
+        // If the default model is downloaded, select it
+        if (models.includes(DEFAULT_MODEL_ID)) {
+          setSelectedModelId(DEFAULT_MODEL_ID);
+        } else {
+          // Otherwise select the first downloaded model
+          setSelectedModelId(models[0]);
+        }
+        setIsModelDownloaded(true);
       } else {
-        console.log('Model not found locally');
+        setIsModelDownloaded(false);
       }
     } catch (err) {
-      console.error('Error checking if model exists:', err);
-      setError('Error checking if model exists');
+      console.error('Error checking downloaded models:', err);
+      setError('Error checking downloaded models');
     }
   };
 
@@ -105,9 +123,8 @@ export default function App() {
     }
   };
 
-  const downloadModel = async () => {
-    if (isModelDownloaded) {
-      Alert.alert('Model already downloaded', 'The model is already installed on your device.');
+  const downloadSelectedModel = async () => {
+    if (isDownloading) {
       return;
     }
 
@@ -116,27 +133,43 @@ export default function App() {
       setDownloadProgress(0);
       setError(null);
 
-      const downloadResumable = FileSystem.createDownloadResumable(
-        MODEL_URL,
-        MODEL_LOCAL_PATH,
-        {},
-        (downloadProgress) => {
-          const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
-          setDownloadProgress(progress);
-        }
-      );
+      const success = await downloadModel(selectedModelId, (progress) => {
+        setDownloadProgress(progress);
+      });
 
-      const { uri } = await downloadResumable.downloadAsync();
-      
-      if (uri) {
-        setIsModelDownloaded(true);
-        Alert.alert('Success', 'Model downloaded successfully!');
+      if (success) {
+        setDownloadedModels(prev => [...prev, selectedModelId]);
+        Alert.alert('Success', `Model ${MODELS[selectedModelId].name} downloaded successfully!`);
+      } else {
+        setError(`Failed to download model ${MODELS[selectedModelId].name}. Please try again.`);
       }
     } catch (err) {
       console.error('Error downloading model:', err);
       setError('Error downloading model. Please try again.');
     } finally {
       setIsDownloading(false);
+    }
+  };
+
+  const deleteSelectedModel = async (modelId: string) => {
+    try {
+      // Don't delete the currently loaded model
+      if (modelId === currentModelId) {
+        Alert.alert('Cannot Delete', 'Cannot delete the currently loaded model. Please load a different model first.');
+        return;
+      }
+
+      const success = await deleteModel(modelId);
+      
+      if (success) {
+        setDownloadedModels(prev => prev.filter(id => id !== modelId));
+        Alert.alert('Success', `Model ${MODELS[modelId].name} deleted successfully!`);
+      } else {
+        setError(`Failed to delete model ${MODELS[modelId].name}. Please try again.`);
+      }
+    } catch (err) {
+      console.error('Error deleting model:', err);
+      setError('Error deleting model. Please try again.');
     }
   };
 
@@ -166,18 +199,19 @@ export default function App() {
     }
   };
 
-  const initializeModel = async () => {
+  const initializeModel = async (modelId: string) => {
     try {
       setIsModelLoading(true);
-      setLoadingMessage('Initializing TTS Model...');
+      setLoadingMessage(`Initializing ${MODELS[modelId].name} model...`);
       
-      const success = await KokoroOnnx.loadModel();
+      const success = await KokoroOnnx.loadModel(modelId);
       
       if (success) {
         setIsModelInitialized(true);
+        setCurrentModelId(modelId);
         setLoadingMessage('Model initialized successfully!');
       } else {
-        setError('Failed to initialize model');
+        setError(`Failed to initialize model ${MODELS[modelId].name}`);
       }
     } catch (err) {
       console.error('Error initializing model:', err);
@@ -202,17 +236,35 @@ export default function App() {
       setIsGeneratingAudio(true);
       setError(null);
       
-      // Unload previous sound if exists
+      // Stop any existing streaming audio
       if (sound) {
         await sound.unloadAsync();
+        setSound(null);
       }
       
-      // Generate new audio
-      const newSound = await KokoroOnnx.generateAudio(text, selectedVoice, speed);
-      setSound(newSound);
+      setIsStreaming(true);
+      setStreamProgress(0);
+      setTokensPerSecond(0);
+      setTimeToFirstToken(0);
+      setStreamingPhonemes("");
       
-      // Play the sound
-      await newSound.playAsync();
+      // Generate and stream audio
+      const result = await KokoroOnnx.streamAudio(
+        text,
+        selectedVoice,
+        speed,
+        (status) => {
+          setStreamProgress(status.progress);
+          setTokensPerSecond(status.tokensPerSecond);
+          setStreamPosition(status.position);
+          setStreamDuration(status.duration);
+          setStreamingPhonemes(status.phonemes);
+        }
+      );
+      
+      // Update initial metrics
+      setTokensPerSecond(result.tokensPerSecond);
+      setTimeToFirstToken(result.timeToFirstToken);
       
     } catch (err) {
       console.error('Error generating speech:', err);
@@ -248,74 +300,221 @@ export default function App() {
   };
 
   const stopSound = async () => {
-    if (!sound) return;
-    
+    if (!sound) {
+      return;
+    }
+
     try {
       await sound.stopAsync();
       await sound.setPositionAsync(0);
     } catch (err) {
       console.error('Error stopping sound:', err);
+      setError('Error stopping sound. Please try again.');
     }
   };
 
-  const adjustSpeed = (newSpeed: number) => {
-    setSpeed(Math.max(0.5, Math.min(2.0, newSpeed)));
+  const renderModelItem = ({ item }: { item: string }) => {
+    const model = MODELS[item];
+    const isDownloaded = downloadedModels.includes(item);
+    const isSelected = item === selectedModelId;
+    const isLoaded = item === currentModelId;
+    
+    return (
+      <View style={[
+        styles.modelItem, 
+        isSelected && styles.selectedModelItem,
+        isLoaded && styles.loadedModelItem
+      ]}>
+        <TouchableOpacity 
+          style={styles.modelItemContent}
+          onPress={() => {
+            setSelectedModelId(item);
+            if (isDownloaded && !isLoaded) {
+              setShowModelSelector(false);
+              initializeModel(item);
+            }
+          }}
+        >
+          <View style={styles.modelItemHeader}>
+            <Text style={styles.modelName}>{model.name}</Text>
+            <Text style={styles.modelSize}>{model.size}</Text>
+          </View>
+          <Text style={styles.modelDescription}>{model.description}</Text>
+          <View style={styles.modelItemFooter}>
+            {isDownloaded ? (
+              <>
+                <Text style={styles.modelStatus}>
+                  {isLoaded ? '✓ Currently Loaded' : '✓ Downloaded'}
+                </Text>
+                {!isLoaded && (
+                  <TouchableOpacity 
+                    style={styles.deleteButton}
+                    onPress={() => deleteSelectedModel(item)}
+                  >
+                    <Text style={styles.deleteButtonText}>Delete</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            ) : (
+              <TouchableOpacity 
+                style={styles.downloadButton}
+                onPress={() => {
+                  setShowModelSelector(false);
+                  downloadSelectedModel();
+                }}
+              >
+                <Text style={styles.downloadButtonText}>Download</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </TouchableOpacity>
+      </View>
+    );
   };
 
+  const SpeedSelector = () => (
+    <View style={styles.speedSelectorContainer}>
+      <View style={styles.speedControls}>
+        <TouchableOpacity 
+          style={styles.speedButton}
+          onPress={() => setSpeed(Math.max(0.5, speed - 0.1))}
+          disabled={speed <= 0.5}
+        >
+          <Text style={styles.speedButtonText}>-</Text>
+        </TouchableOpacity>
+        
+        <View style={styles.speedValueContainer}>
+          <Text style={styles.speedValue}>{speed.toFixed(1)}x</Text>
+        </View>
+        
+        <TouchableOpacity 
+          style={styles.speedButton}
+          onPress={() => setSpeed(Math.min(2.0, speed + 0.1))}
+          disabled={speed >= 2.0}
+        >
+          <Text style={styles.speedButtonText}>+</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView 
-        style={styles.keyboardAvoid} 
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardAvoidingView}
       >
+        <ScrollView contentContainerStyle={styles.scrollView}>
         <StatusBar style="auto" />
         
         <View style={styles.header}>
           <Text style={styles.title}>Kokoro TTS Demo</Text>
-          <Text style={styles.subtitle}>Using Native ONNX Runtime</Text>
-        </View>
-        
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-          {/* Model Download Section */}
-          <View style={styles.modelSection}>
-            <Text style={styles.sectionTitle}>Model Status</Text>
-            <Text style={styles.modelStatus}>
-              {isModelDownloaded ? 'Model is installed ✓' : 'Model needs to be downloaded'}
-            </Text>
-            
-            {isDownloading ? (
-              <View style={styles.downloadProgress}>
-                <ActivityIndicator size="large" color="#0000ff" />
-                <Text style={styles.progressText}>{`Downloading... ${Math.round(downloadProgress * 100)}%`}</Text>
-              </View>
-            ) : (
+            <Text style={styles.subtitle}>Text-to-Speech with ONNX Runtime</Text>
+          </View>
+          
+          {error && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+          
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Model</Text>
+            <View style={styles.modelSection}>
               <TouchableOpacity 
-                style={[
-                  styles.downloadButton, 
-                  isModelDownloaded ? styles.downloadButtonDisabled : null
-                ]} 
-                onPress={downloadModel}
-                disabled={isModelDownloaded}
+                style={styles.modelSelector}
+                onPress={() => setShowModelSelector(true)}
               >
-                <Text style={styles.downloadButtonText}>
-                  {isModelDownloaded ? 'Model Installed' : 'Download Model'}
+                <Text style={styles.modelSelectorText}>
+                  {currentModelId ? MODELS[currentModelId].name : 'Select Model'}
+                </Text>
+                <Text style={styles.modelSelectorSubtext}>
+                  {currentModelId ? MODELS[currentModelId].size : 'No model loaded'}
                 </Text>
               </TouchableOpacity>
+              
+              {!isModelInitialized && downloadedModels.includes(selectedModelId) && (
+                <TouchableOpacity 
+                  style={styles.initButton}
+                  onPress={() => initializeModel(selectedModelId)}
+                  disabled={isModelLoading}
+                >
+                  <Text style={styles.buttonText}>Initialize</Text>
+                </TouchableOpacity>
+              )}
+              
+              {downloadedModels.length === 0 && (
+                <TouchableOpacity 
+                  style={styles.downloadButton}
+                  onPress={downloadSelectedModel}
+                  disabled={isDownloading}
+                >
+                  <Text style={styles.buttonText}>
+                    {isDownloading ? 'Downloading...' : 'Download Model'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            
+            {isDownloading && (
+              <View style={styles.progressContainer}>
+                <View style={[styles.progressBar, { width: `${downloadProgress * 100}%` }]} />
+                <Text style={styles.progressText}>{Math.round(downloadProgress * 100)}%</Text>
+              </View>
             )}
             
             {isModelLoading && (
-              <View style={styles.downloadProgress}>
-                <ActivityIndicator size="small" color="#0000ff" />
-                <Text style={styles.progressText}>{loadingMessage}</Text>
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="small" color="#007AFF" />
+                <Text style={styles.loadingText}>{loadingMessage}</Text>
               </View>
             )}
-            
-            {error && <Text style={styles.errorText}>{error}</Text>}
           </View>
           
-          {/* Text Input Section */}
-          <View style={styles.inputSection}>
-            <Text style={styles.sectionTitle}>Text to Speak</Text>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Voice</Text>
+            <View style={styles.voiceSelector}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {availableVoices.map((voiceId) => (
+                  <TouchableOpacity
+                    key={voiceId}
+                    style={[
+                      styles.voiceItem,
+                      selectedVoice === voiceId && styles.selectedVoiceItem,
+                      !downloadedVoices.has(voiceId) && styles.undownloadedVoiceItem
+                    ]}
+                    onPress={() => setSelectedVoice(voiceId)}
+                  >
+                    <Text style={styles.voiceName}>{VOICES[voiceId].name}</Text>
+                    <Text style={styles.voiceGender}>{VOICES[voiceId].gender}</Text>
+                    {!downloadedVoices.has(voiceId) && (
+                      <Text style={styles.downloadIndicator}>↓</Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+            
+            {!downloadedVoices.has(selectedVoice) && (
+              <TouchableOpacity
+                style={styles.downloadButton}
+                onPress={downloadVoice}
+                disabled={isVoiceDownloading}
+              >
+                <Text style={styles.buttonText}>
+                  {isVoiceDownloading ? 'Downloading...' : `Download ${VOICES[selectedVoice].name} Voice`}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Speed</Text>
+            <SpeedSelector />
+          </View>
+          
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Text</Text>
             <TextInput
               style={styles.textInput}
               multiline
@@ -323,344 +522,441 @@ export default function App() {
               onChangeText={setText}
               placeholder="Enter text to convert to speech"
             />
-          </View>
+        </View>
+    
           
-          {/* Voice Selection Section */}
-          <View style={styles.voiceSection}>
-            <Text style={styles.sectionTitle}>Select Voice</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.voiceList}>
-              {availableVoices.map((voice) => (
-                <TouchableOpacity
-                  key={voice}
-                  style={[
-                    styles.voiceButton,
-                    selectedVoice === voice ? styles.selectedVoiceButton : null,
-                    downloadedVoices.has(voice) ? styles.downloadedVoiceButton : null
-                  ]}
-                  onPress={() => setSelectedVoice(voice)}
-                >
-                  <Text 
-                    style={[
-                      styles.voiceButtonText,
-                      selectedVoice === voice ? styles.selectedVoiceButtonText : null
-                    ]}
-                  >
-                    {VOICES[voice].name}
-                    {downloadedVoices.has(voice) ? ' ✓' : ''}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            
-            {/* Voice Download Button */}
-            {isVoiceDownloading ? (
-              <View style={styles.downloadProgress}>
-                <ActivityIndicator size="small" color="#0000ff" />
-                <Text style={styles.progressText}>Downloading voice...</Text>
-              </View>
-            ) : (
-              <TouchableOpacity 
-                style={[
-                  styles.voiceDownloadButton, 
-                  downloadedVoices.has(selectedVoice) ? styles.downloadButtonDisabled : null
-                ]} 
-                onPress={downloadVoice}
-                disabled={downloadedVoices.has(selectedVoice)}
+          <View style={styles.buttonContainer}>
+            <View style={styles.generateButtonContainer}>
+              <TouchableOpacity
+                style={[styles.button, styles.generateButton]}
+                onPress={generateSpeech}
+                disabled={isGeneratingAudio || !isModelInitialized || !downloadedVoices.has(selectedVoice)}
               >
-                <Text style={styles.downloadButtonText}>
-                  {downloadedVoices.has(selectedVoice) 
-                    ? `Voice "${VOICES[selectedVoice].name}" Installed` 
-                    : `Download Voice "${VOICES[selectedVoice].name}"`}
+                <Text style={styles.buttonText}>
+                  {isGeneratingAudio ? 'Generating...' : 'Generate Speech'}
                 </Text>
               </TouchableOpacity>
-            )}
-          </View>
-          
-          {/* Speed Control Section */}
-          <View style={styles.speedSection}>
-            <Text style={styles.sectionTitle}>Speaking Speed: {speed.toFixed(1)}x</Text>
-            <View style={styles.speedButtons}>
-              <TouchableOpacity 
-                style={styles.speedButton} 
-                onPress={() => adjustSpeed(speed - 0.1)}
-              >
-                <Text style={styles.speedButtonText}>-</Text>
-              </TouchableOpacity>
               
-              <TouchableOpacity 
-                style={styles.speedButton} 
-                onPress={() => setSpeed(1.0)}
-              >
-                <Text style={styles.speedButtonText}>Reset</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.speedButton} 
-                onPress={() => adjustSpeed(speed + 0.1)}
-              >
-                <Text style={styles.speedButtonText}>+</Text>
-              </TouchableOpacity>
+              {sound && (
+                <View style={styles.playbackControls}>
+                  <TouchableOpacity
+                    style={styles.iconButton}
+                    onPress={playSound}
+                  >
+                    <Text style={styles.iconButtonText}>▶️</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={styles.iconButton}
+                    onPress={stopSound}
+                  >
+                    <Text style={styles.iconButtonText}>⏹️</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
-          </View>
-          
-          {/* Playback Controls */}
-          <View style={styles.playbackSection}>
-            {isGeneratingAudio ? (
-              <View style={styles.generatingContainer}>
-                <ActivityIndicator size="large" color="#0000ff" />
-                <Text style={styles.generatingText}>Generating audio...</Text>
-              </View>
-            ) : (
-              <View style={styles.buttonContainer}>
-                <TouchableOpacity 
-                  style={[
-                    styles.playButton, 
-                    (!isModelInitialized || !downloadedVoices.has(selectedVoice)) ? styles.buttonDisabled : null
-                  ]} 
-                  onPress={generateSpeech}
-                  disabled={!isModelInitialized || !downloadedVoices.has(selectedVoice)}
-                >
-                  <Text style={styles.buttonText}>Generate & Play</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.controlButton, !sound ? styles.buttonDisabled : null]} 
-                  onPress={playSound}
-                  disabled={!sound}
-                >
-                  <Text style={styles.buttonText}>Play/Pause</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.controlButton, !sound ? styles.buttonDisabled : null]} 
-                  onPress={stopSound}
-                  disabled={!sound}
-                >
-                  <Text style={styles.buttonText}>Stop</Text>
-                </TouchableOpacity>
-              </View>
-            )}
           </View>
         </ScrollView>
      </KeyboardAvoidingView>
+      
+      <Modal
+        visible={showModelSelector}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowModelSelector(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Model</Text>
+              <TouchableOpacity onPress={() => setShowModelSelector(false)}>
+                <Text style={styles.closeButton}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <FlatList
+              data={Object.keys(MODELS)}
+              renderItem={renderModelItem}
+              keyExtractor={(item) => item}
+              contentContainerStyle={styles.modelList}
+            />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f5f5f7',
   },
-  keyboardAvoid: {
+  keyboardAvoidingView: {
     flex: 1,
+  },
+  scrollView: {
+    padding: 20,
   },
   header: {
-    paddingTop: 10,
-    paddingBottom: 10,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#eaeaea',
+    alignItems: 'center',
+    marginBottom: 20,
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 5,
+    color: '#1c1c1e',
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
+    color: '#636366',
+    marginTop: 5,
   },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
+  section: {
+    marginBottom: 20,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
     padding: 15,
-    paddingBottom: 30,
-  },
-  textInput: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 15,
-    minHeight: 120,
-    fontSize: 16,
-    marginBottom: 20,
-    textAlignVertical: 'top',
-    backgroundColor: '#fff',
-  },
-  voiceSection: {
-    marginBottom: 20,
-  },
-  inputSection: {
-    marginBottom: 20,
-  },
-  speedSection: {
-    marginBottom: 20,
-  },
-  playbackSection: {
-    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '600',
     marginBottom: 10,
+    color: '#1c1c1e',
   },
-  voiceList: {
+  modelSection: {
     flexDirection: 'row',
-    marginBottom: 15,
-  },
-  voiceButton: {
-    marginRight: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: '#f0f0f0',
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  selectedVoiceButton: {
-    backgroundColor: '#4285F4',
-    borderColor: '#2979FF',
-  },
-  downloadedVoiceButton: {
-    borderColor: '#4CAF50',
-  },
-  voiceButtonText: {
-    fontSize: 14,
-    color: '#333',
-  },
-  selectedVoiceButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  speedContainer: {
-    marginTop: 10,
     alignItems: 'center',
-  },
-  speedButtons: {
-    flexDirection: 'row',
     justifyContent: 'space-between',
-    width: '100%',
-    marginTop: 10,
   },
-  speedButton: {
-    backgroundColor: '#f0f0f0',
-    paddingVertical: 8,
+  modelSelector: {
+    flex: 1,
+    padding: 10,
+    backgroundColor: '#f2f2f7',
+    borderRadius: 8,
+    marginRight: 10,
+  },
+  modelSelectorText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#007AFF',
+  },
+  modelSelectorSubtext: {
+    fontSize: 12,
+    color: '#8e8e93',
+    marginTop: 2,
+  },
+  initButton: {
+    backgroundColor: '#34C759',
+    paddingVertical: 10,
     paddingHorizontal: 15,
     borderRadius: 8,
+  },
+  downloadButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 8,
+  },
+  buttonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  progressContainer: {
+    marginTop: 10,
+    height: 20,
+    backgroundColor: '#e5e5ea',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#34C759',
+  },
+  progressText: {
+    position: 'absolute',
+    width: '100%',
+    textAlign: 'center',
+    color: '#000',
+    fontWeight: '600',
+    fontSize: 12,
+    lineHeight: 20,
+  },
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  loadingText: {
+    marginLeft: 10,
+    color: '#636366',
+    fontSize: 14,
+  },
+  voiceSelector: {
+    marginBottom: 10,
+  },
+  voiceItem: {
+    padding: 10,
+    backgroundColor: '#f2f2f7',
+    borderRadius: 8,
+    marginRight: 10,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  selectedVoiceItem: {
+    backgroundColor: '#d1e7ff',
+    borderColor: '#007AFF',
     borderWidth: 1,
-    borderColor: '#ddd',
+  },
+  undownloadedVoiceItem: {
+    opacity: 0.7,
+  },
+  voiceName: {
+    fontWeight: '600',
+    fontSize: 14,
+    color: '#1c1c1e',
+  },
+  voiceGender: {
+    fontSize: 12,
+    color: '#636366',
+    marginTop: 2,
+  },
+  downloadIndicator: {
+    fontSize: 16,
+    color: '#007AFF',
+    marginTop: 2,
+  },
+  speedSelectorContainer: {
+    padding: 10,
+  },
+  speedControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speedButton: {
+    backgroundColor: '#007AFF',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
   speedButtonText: {
-    fontSize: 16,
+    color: '#ffffff',
+    fontSize: 24,
     fontWeight: 'bold',
   },
-  buttonContainer: {
+  speedValueContainer: {
+    paddingHorizontal: 20,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  speedValue: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1c1c1e',
+  },
+  streamingInfo: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 10,
+    marginBottom: 10,
   },
-  playButton: {
-    backgroundColor: '#4CAF50',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    flex: 1,
-    marginRight: 10,
-    alignItems: 'center',
-  },
-  controlButton: {
-    backgroundColor: '#2196F3',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    borderRadius: 8,
-    flex: 1,
-    marginRight: 10,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: 'bold',
+  streamingMetric: {
     fontSize: 14,
+    color: '#636366',
   },
-  buttonDisabled: {
-    backgroundColor: '#cccccc',
+  streamProgressBar: {
+    height: 4,
+    backgroundColor: '#e5e5ea',
+    borderRadius: 2,
+    overflow: 'hidden',
   },
-  loadingContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-    height: 300,
+  streamProgress: {
+    height: '100%',
+    backgroundColor: '#34C759',
   },
-  loadingText: {
-    marginTop: 20,
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  loadingNote: {
-    marginTop: 10,
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-  },
-  errorText: {
-    color: 'red',
-    marginVertical: 10,
-    textAlign: 'center',
-  },
-  modelSection: {
-    marginBottom: 20,
-    padding: 15,
-    backgroundColor: '#f9f9f9',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#eaeaea',
-  },
-  modelStatus: {
-    fontSize: 16,
-    marginBottom: 15,
-  },
-  downloadButton: {
-    backgroundColor: '#4285F4',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  voiceDownloadButton: {
-    backgroundColor: '#4285F4',
+  errorContainer: {
+    backgroundColor: '#ffdddd',
     padding: 10,
     borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 10,
+    marginBottom: 20,
+    borderColor: '#ff6b6b',
+    borderWidth: 1,
   },
-  downloadButtonDisabled: {
-    backgroundColor: '#A4C2F4',
-  },
-  downloadButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  downloadProgress: {
-    alignItems: 'center',
-    marginVertical: 10,
-  },
-  progressText: {
-    marginTop: 10,
+  errorText: {
+    color: '#d63031',
     fontSize: 14,
   },
-  generatingContainer: {
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e5ea',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1c1c1e',
+  },
+  closeButton: {
+    fontSize: 16,
+    color: '#007AFF',
+  },
+  modelList: {
+    padding: 15,
+  },
+  modelItem: {
+    backgroundColor: '#f2f2f7',
+    borderRadius: 12,
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  selectedModelItem: {
+    borderColor: '#007AFF',
+    borderWidth: 2,
+  },
+  loadedModelItem: {
+    backgroundColor: '#d1e7ff',
+  },
+  modelItemContent: {
+    padding: 15,
+  },
+  modelItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  modelName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1c1c1e',
+  },
+  modelSize: {
+    fontSize: 14,
+    color: '#636366',
+  },
+  modelDescription: {
+    fontSize: 14,
+    color: '#636366',
+    marginBottom: 10,
+  },
+  modelItemFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modelStatus: {
+    fontSize: 14,
+    color: '#34C759',
+    fontWeight: '500',
+  },
+  deleteButton: {
+    backgroundColor: '#FF3B30',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 5,
+  },
+  deleteButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  downloadButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  buttonContainer: {
+    marginBottom: 20,
+  },
+  generateButtonContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  button: {
+    flex: 1,
+    backgroundColor: '#007AFF',
+    paddingVertical: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  generateButton: {
+    backgroundColor: '#FF2D55',
+  },
+  playbackControls: {
+    flexDirection: 'row',
+    marginLeft: 10,
+  },
+  iconButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#f2f2f7',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 20,
+    marginLeft: 5,
   },
-  generatingText: {
+  iconButtonText: {
+    fontSize: 24,
+  },
+  streamingMetricsContainer: {
+    marginBottom: 10,
+  },
+  streamingMetricRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  streamingMetricLabel: {
+    fontSize: 14,
+    color: '#636366',
+    fontWeight: '500',
+  },
+  streamingMetricValue: {
+    fontSize: 14,
+    color: '#1c1c1e',
+    fontWeight: '600',
+  },
+  phonemesContainer: {
     marginTop: 10,
-    fontSize: 16,
+    padding: 10,
+    backgroundColor: '#f2f2f7',
+    borderRadius: 8,
+  },
+  phonemesLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#636366',
+    marginBottom: 5,
+  },
+  phonemesText: {
+    fontSize: 14,
+    color: '#1c1c1e',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
 }); 

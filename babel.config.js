@@ -11,8 +11,7 @@ module.exports = function(api) {
           'fs': 'react-native-fs',
           'crypto': 'crypto-browserify',
         },
-      }],
-      "babel-plugin-transform-import-meta"
+      }]
     ],
   };
 }; 

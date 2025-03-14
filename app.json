@@ -18,8 +18,10 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "This app uses the microphone to record audio for speech recognition."
-      }
+        "NSMicrophoneUsageDescription": "This app uses the microphone to record audio for speech recognition.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.allysonai.ttsdemo"
     },
     "android": {
       "adaptiveIcon": {
@@ -28,7 +30,10 @@
       },
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.INTERNET"
       ]
     },
     "web": {
@@ -46,10 +51,13 @@
         {
           "filePermission": "This app needs access to files on your device."
         }
-      ],
-      "expo-asset",
-      "onnxruntime-react-native"
+      ]  
     ],
-    "newArchEnabled": true
+    "newArchEnabled": true,
+    "extra": {
+      "eas": {
+        "projectId": "c265b042-3630-4654-adeb-ffa944bd0fad"
+      }
+    }
   }
 }
