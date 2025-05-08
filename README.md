@@ -56,7 +56,7 @@ Kokoro TTS uses a neural text-to-speech model converted to ONNX format, which al
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/expo-kokoro-onnx.git
+   git clone https://github.com/isaiahbjork/expo-kokoro-onnx.git
    cd expo-kokoro-onnx
    ```
 
@@ -75,13 +75,7 @@ Kokoro TTS uses a neural text-to-speech model converted to ONNX format, which al
 To run the app on a physical device with full ONNX Runtime support:
 
 ```bash
-npx expo run:ios
-```
-
-or
-
-```bash
-npx expo run:android
+npx eas build --platform ios --profile development
 ```
 
 ## Usage
